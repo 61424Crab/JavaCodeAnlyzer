@@ -19,22 +19,41 @@ public class DirectoryTreePrinter {
             return;
         }
 
-        System.out.println(indent + "|-- " + node.getName());
-
         if (node.isDirectory()) {
             File[] files = node.listFiles();
             if (files == null) {
                 return;
             }
-            for (File file : files) {
-                printDirectoryTree(file, indent + "   ");
+
+            boolean isTargetDir = isTargetDirectory(node);
+            if (isTargetDir) {
+                System.out.println(indent + "|-- " + node.getName());
             }
-        } else if (node.getName().endsWith(".java")) {
-            // If it's a Java file, parse it and print constructors and public methods
+
+            for (File file : files) {
+                if (isTargetDir) { // 如果是目标目录则增加缩进打印内容
+                    printDirectoryTree(file, indent + "   ");
+                } else {
+                    printDirectoryTree(file, indent);
+                }
+            }
+        } else if (node.getName().endsWith(".java") && isUnderTargetDirectory(node)) {
+            // If it's a Java file and is under a target directory, parse it and print constructors and public methods
             printJavaDetails(node);
         }
     }
-
+    
+    
+    
+    public static boolean isTargetDirectory(File file) {
+        return file.isDirectory() && (file.getName().equals("AAA") || file.getName().equals("AAB") || file.getName().equals("AAC"));
+    }
+    
+    public static boolean isUnderTargetDirectory(File file) {
+        File parent = file.getParentFile();
+        return parent != null && isTargetDirectory(parent);
+    }
+    
     public static void printJavaDetails(File javaFile) {
     	try {
     		JavaParser parse = new JavaParser();
@@ -43,17 +62,20 @@ public class DirectoryTreePrinter {
             
             cu = parse.parse(javaFile).getResult().orElse(null);
             
-            // Print constructors
-            for (ConstructorDeclaration constructor : cu.findAll(ConstructorDeclaration.class)) {
-                System.out.println("   |-- Constructor: " + constructor.getSignature());
-            }
+            if(cu != null ) {
+                // Print constructors
+                for (ConstructorDeclaration constructor : cu.findAll(ConstructorDeclaration.class)) {
+                    System.out.println("   |-- Constructor: " + constructor.getSignature());
+                }
 
-            // Print public methods
-            for (MethodDeclaration method : cu.findAll(MethodDeclaration.class)) {
-                if (method.isPublic()) {
-                    System.out.println("   |-- Public method: " + method.getSignature());
+                // Print public methods
+                for (MethodDeclaration method : cu.findAll(MethodDeclaration.class)) {
+                    if (method.isPublic()) {
+                        System.out.println("   |-- Public method: " + method.getSignature());
+                    }
                 }
             }
+                        
         } catch (IOException e) {
             e.printStackTrace();
         }
