@@ -25,20 +25,17 @@ public class DirectoryTreePrinter {
                 return;
             }
 
-            boolean isTargetDir = isTargetDirectory(node);
-            if (isTargetDir) {
+            boolean shouldPrintCurrentDirectory = anyChildIsTargetDirectory(node);
+
+            if (shouldPrintCurrentDirectory) {
                 System.out.println(indent + "|-- " + node.getName());
             }
 
             for (File file : files) {
-                if (isTargetDir) { // 如果是目标目录则增加缩进打印内容
-                    printDirectoryTree(file, indent + "   ");
-                } else {
-                    printDirectoryTree(file, indent);
-                }
+                printDirectoryTree(file, indent + "   ");
             }
         } else if (node.getName().endsWith(".java") && isUnderTargetDirectory(node)) {
-            // If it's a Java file and is under a target directory, parse it and print constructors and public methods
+            System.out.println(indent + "|-- " + node.getName());
             printJavaDetails(node);
         }
     }
@@ -48,10 +45,26 @@ public class DirectoryTreePrinter {
     public static boolean isTargetDirectory(File file) {
         return file.isDirectory() && (file.getName().equals("AAA") || file.getName().equals("AAB") || file.getName().equals("AAC"));
     }
-    
+
     public static boolean isUnderTargetDirectory(File file) {
         File parent = file.getParentFile();
         return parent != null && isTargetDirectory(parent);
+    }
+
+    public static boolean anyChildIsTargetDirectory(File directory) {
+        if (!directory.isDirectory()) {
+            return false;
+        }
+        File[] children = directory.listFiles();
+        if (children == null) {
+            return false;
+        }
+        for (File child : children) {
+            if (isTargetDirectory(child) || anyChildIsTargetDirectory(child)) {
+                return true;
+            }
+        }
+        return false;
     }
     
     public static void printJavaDetails(File javaFile) {
