@@ -10,7 +10,10 @@ import com.github.javaparser.utils.SourceRoot;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -48,15 +51,29 @@ public class JavaProjectAnalyzer {
 	}
 
 	public static void convertJavaFilesToUTF8(Path path) throws IOException {
-		Files.walk(path).filter(p -> p.toString().endsWith(".java")).forEach(p -> {
-			try {
-				byte[] encoded = Files.readAllBytes(p);
-				String content = new String(encoded, Charset.forName("Shift-JIS"));
-				Files.write(p, content.getBytes(StandardCharsets.UTF_8));
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		});
+	    Files.walk(path)
+	         .filter(p -> p.toString().endsWith(".java"))
+	         .forEach(p -> {
+	             try {
+	                 if (!isValidUTF8(Files.readAllBytes(p))) {
+	                     byte[] encoded = Files.readAllBytes(p);
+	                     String content = new String(encoded, Charset.forName("Shift-JIS"));
+	                     Files.write(p, content.getBytes(StandardCharsets.UTF_8));
+	                 }
+	             } catch (IOException e) {
+	                 e.printStackTrace();
+	             }
+	         });
+	}
+	
+	private static boolean isValidUTF8(byte[] input) {
+	    try {
+	        CharsetDecoder cs = StandardCharsets.UTF_8.newDecoder();
+	        cs.decode(ByteBuffer.wrap(input));
+	        return true;
+	    } catch (CharacterCodingException e) {
+	        return false;
+	    }
 	}
 
 	public static void printDirectoryTree(File node, String indent) {
