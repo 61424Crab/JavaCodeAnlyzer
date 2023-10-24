@@ -23,6 +23,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import org.mozilla.universalchardet.UniversalDetector;
+
 public class JavaProjectAnalyzer {
 
 	private static final String PROJECT_PATH = "H:\\DevelopTools\\workspace\\HybridEncryptionWithSignature\\HybridEncryptionWithSignature";
@@ -55,9 +57,14 @@ public class JavaProjectAnalyzer {
 	         .filter(p -> p.toString().endsWith(".java"))
 	         .forEach(p -> {
 	             try {
-	                 if (!isValidUTF8(Files.readAllBytes(p))) {
+	                 String detectedCharset = detectCharset(Files.readAllBytes(p));
+	                 
+	                 if (detectedCharset == null || !detectedCharset.equalsIgnoreCase("UTF-8")) {
 	                     byte[] encoded = Files.readAllBytes(p);
-	                     String content = new String(encoded, Charset.forName("Shift-JIS"));
+	                     String content = (detectedCharset != null) 
+	                                       ? new String(encoded, detectedCharset) 
+	                                       : new String(encoded); // Default system charset
+	                     
 	                     Files.write(p, content.getBytes(StandardCharsets.UTF_8));
 	                 }
 	             } catch (IOException e) {
@@ -65,15 +72,14 @@ public class JavaProjectAnalyzer {
 	             }
 	         });
 	}
-	
-	private static boolean isValidUTF8(byte[] input) {
-	    try {
-	        CharsetDecoder cs = StandardCharsets.UTF_8.newDecoder();
-	        cs.decode(ByteBuffer.wrap(input));
-	        return true;
-	    } catch (CharacterCodingException e) {
-	        return false;
-	    }
+
+	private static String detectCharset(byte[] data) {
+	    UniversalDetector detector = new UniversalDetector(null);
+	    detector.handleData(data, 0, data.length);
+	    detector.dataEnd();
+	    String encoding = detector.getDetectedCharset();
+	    detector.reset();
+	    return encoding;
 	}
 
 	public static void printDirectoryTree(File node, String indent) {
