@@ -1,6 +1,3 @@
-番号
-300NTK-661
-
 import java.io.FileInputStream;
 import java.io.IOException;
 
