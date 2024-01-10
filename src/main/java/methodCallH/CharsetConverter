@@ -12,18 +12,27 @@ public class CharsetConverter {
 
     private static void convertSqlFilesToUTF8(Path dir) throws IOException {
         Files.walk(dir)
-             .filter(p -> p.toString().endsWith(".sql"))
-             .forEach(CharsetConverter::processFile);
+            .filter(p -> {
+                if (Files.isDirectory(p)) {
+                    // 如果是目录，检查目录名是否包含点
+                    return !p.getFileName().toString().contains(".");
+                }
+                return p.toString().endsWith(".sql");
+            })
+            .forEach(CharsetConverter::processFile);
     }
 
     private static void processFile(Path path) {
         try {
-            byte[] fileContent = Files.readAllBytes(path);
-            String detectedCharset = detectCharset(fileContent);
+            // 只处理文件，跳过目录
+            if (Files.isRegularFile(path)) {
+                byte[] fileContent = Files.readAllBytes(path);
+                String detectedCharset = detectCharset(fileContent);
 
-            if (detectedCharset != null && !detectedCharset.equalsIgnoreCase("UTF-8")) {
-                String content = new String(fileContent, detectedCharset);
-                Files.write(path, content.getBytes(StandardCharsets.UTF_8));
+                if (detectedCharset != null && !detectedCharset.equalsIgnoreCase("UTF-8")) {
+                    String content = new String(fileContent, detectedCharset);
+                    Files.write(path, content.getBytes(StandardCharsets.UTF_8));
+                }
             }
         } catch (IOException e) {
             System.out.println("Error processing file: " + path.getFileName());
