@@ -1,0 +1,41 @@
+import org.mozilla.universalchardet.UniversalDetector;
+import java.nio.file.*;
+import java.nio.charset.*;
+import java.io.*;
+
+public class CharsetConverter {
+
+    public static void main(String[] args) throws IOException {
+        Path dir = Paths.get("指定的目录"); // 替换为您的目标目录
+        convertSqlFilesToUTF8(dir);
+    }
+
+    private static void convertSqlFilesToUTF8(Path dir) throws IOException {
+        Files.walk(dir)
+             .filter(p -> p.toString().endsWith(".sql"))
+             .forEach(CharsetConverter::processFile);
+    }
+
+    private static void processFile(Path path) {
+        try {
+            byte[] fileContent = Files.readAllBytes(path);
+            String detectedCharset = detectCharset(fileContent);
+
+            if (detectedCharset != null && !detectedCharset.equalsIgnoreCase("UTF-8")) {
+                String content = new String(fileContent, detectedCharset);
+                Files.write(path, content.getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (IOException e) {
+            System.out.println("Error processing file: " + path.getFileName());
+        }
+    }
+
+    private static String detectCharset(byte[] data) {
+        UniversalDetector detector = new UniversalDetector(null);
+        detector.handleData(data, 0, data.length);
+        detector.dataEnd();
+        String encoding = detector.getDetectedCharset();
+        detector.reset();
+        return encoding;
+    }
+}
