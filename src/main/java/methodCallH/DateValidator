@@ -1,0 +1,25 @@
+public class DateValidator {
+    public static boolean isLeapYear(int year) {
+        return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
+    }
+
+    public static boolean isValidDate(int year, int month, int day) {
+        if (month < 1 || month > 12) {
+            return false; // 月份不在1到12的范围内
+        }
+
+        int[] daysInMonth = {
+            31, isLeapYear(year) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+        };
+
+        return day > 0 && day <= daysInMonth[month - 1];
+    }
+
+    public static void main(String[] args) {
+        // 测试示例
+        System.out.println(isValidDate(2024, 2, 29)); // 闰年2月29日
+        System.out.println(isValidDate(2021, 2, 29)); // 非闰年2月29日
+        System.out.println(isValidDate(2021, 4, 31)); // 4月31日
+        System.out.println(isValidDate(2021, 12, 31)); // 12月31日
+    }
+}
