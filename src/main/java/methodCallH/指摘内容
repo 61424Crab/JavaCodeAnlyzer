@@ -5,3 +5,28 @@ JB007
 サービス解約済みのレコード（電力解約日設定済みデータ）が正しく抽出対象となること。
 【対応依頼】
 JB007の抽出SQL（SQL-CTR-SEL-005）のWHERE条件から「電力解約日 IS NULL（vcpps.power_plan_cancel_date IS NULL）」の条件を削除する。
+
+
+### [HIGH] _handle_app_error_fallback における属性参照エラーのリスク
+
+- ファイル： common/error_handler.py
+- 箇所： 123行目
+- レビュー観点： [D. 例外・エラー・ログ] / [N. AI 生成コード] 架空の戻り値 field
+- 問題： `exc.message` を直接参照している。
+- 発生条件： `exc` オブジェクトに `message` 属性が存在しない場合。
+- 影響： `AttributeError` が発生し、共通エラーレスポンス（JSON）を返せずにサーバーエラーとなる。
+- 判断根拠： AppError のサブクラスによって `message` 属性の有無が保証されていない可能性があるため。
+- 修正案： `getattr(exc, "message", str(exc))` のように安全な属性取得を行う。
+- 状態： 確定
+
+### [HIGH] PathValidationError の既定 error_code 不一致（バグ）
+
+- **ファイル**： `tests/test_exceptions.py` （および `common/exceptions.py`）
+- **箇所**： `test_path_validation_error_has_fixed_error_code` 関数
+- **レビュー観点**： [A. 設計・仕様] 設計、仕様どおりに実装されているか / [I. テスト条件・期待値] 期待値が妥当か
+- **問題**： 設計書における「共通システムエラーコード」の定義ではバリデーションエラー系は `E1000`（または業務ルール違反 `E2000`）と定められているが、コードおよび単体テストでは `PathValidationError` の既定エラーコードが `E6000`（その他エラー）に設定されている。
+- **発生条件**： `PathValidationError` 発生時。
+- **影響**： APIクライアントへ返却されるエラーコードが `E6000`（その他エラー）となり、仕様書で定義された `E1000`（バリデーションエラー）と不一致が発生する。
+- **判断根拠**： 共通システムエラーコード一覧（設計書）において、`E1000`＝バリデーションエラー、`E6000`＝その他エラー と定義されているため。
+- **修正案**： `common/exceptions.py` 内の `PathValidationError` クラスの既定 `error_code` を `E1000`（または設計書指定のコード）に変更し、単体テストの `assert error.error_code == "E1000"` へ修正する。
+- **状態**： 確定
