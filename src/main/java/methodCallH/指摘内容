@@ -30,3 +30,39 @@ JB007の抽出SQL（SQL-CTR-SEL-005）のWHERE条件から「電力解約日 IS 
 - **判断根拠**： 共通システムエラーコード一覧（設計書）において、`E1000`＝バリデーションエラー、`E6000`＝その他エラー と定義されているため。
 - **修正案**： `common/exceptions.py` 内の `PathValidationError` クラスの既定 `error_code` を `E1000`（または設計書指定のコード）に変更し、単体テストの `assert error.error_code == "E1000"` へ修正する。
 - **状態**： 確定
+
+### [HIGH] CP008 エラーハンドラー本体（error_handler.py）のテストケース欠落
+
+- **ファイル**： `tests/test_error_handler.py` (未作成または不足)
+- **レビュー観点**： [H. テスト網羅性] 主要な条件分岐を含んでいるか / 異常系を含んでいるか
+- **問題**： 現在のテストは `exceptions.py` のクラス属性検証のみにとどまっており、`register_exception_handlers` で登録された各ハンドラーが実際に FastAPI / Starlette のレスポンス（HTTP Status Code, レスポンス Body）を正しく生成するか検証するテストが存在しない（または不足している）。
+- **影響**： ハンドラーの登録漏れや、`_build_response` / `_handle_app_error_fallback` の呼び出しロジックに不具合があっても単体テストで検知できない。
+- **不足しているテストケース**：
+  1. **RequestValidationError（CP_008_02/10/11）**：リクエストボディ不正時に HTTP 400 および `E1000` が返り、個人情報（入力値）がログ/レスポンス詳細に含まれないこと。
+  2. **SQLAlchemyError（CP_008_03）**：DB例外発生時に HTTP 500 および `E4000` が返ること。
+  3. **PathValidationError（CP_008_07）**：HTTP 404 および `E1000`（または設計通りのコード）が返ること。
+  4. **Exception（CP_008_09/12）**：未予測のエラー発生時に HTTP 500 および `E6000` が返り、スタックトレースが保持されること。
+- **修正案**： `fastapi.testclient.TestClient` を使用し、各例外を発生させるテスト用エンドポイントを呼び出して、HTTP ステータスコードとレスポンス Body（`error_code` 等）をアサートするテストを追加する。
+- **状態**： 要対応
+
+---
+
+### [MEDIUM] ログ出力（_logger）および Context (Request ID) 連携の検証不足
+
+- **ファイル**： `tests/test_error_handler.py`
+- **レビュー観点**： [I. テスト条件・期待値] アサーションが重要な結果を確認しているか / [J. Mock・テスト独立性]
+- **問題**： エラー発生時に `_logger.warning` や `_logger.error` に正確なメッセージコード（`MSG_ERR_COM_001` 等）や `Request ID` が渡されているかを検証する Mock テスト（`unittest.mock.patch`）が存在しない。
+- **影響**： ログ出力フォーマットの破壊や、CP006（Context）からの Request ID 取得漏れがテストで検知できない。
+- **修正案**： `pytest-mock` や `caplog` を使用し、各エラーハンドラー実行時に指定のログレベルおよびメッセージ引数で logger が呼び出されているか検証するテストを追加する。
+- **状態**： 要対応
+
+---
+
+### [LOW] 境界値・特殊パターンのテスト検証不足
+
+- **ファイル**： `tests/test_exceptions.py`
+- **レビュー観点**： [H. テスト網羅性] 境界値を含んでいるか / 不正入力を含んでいるか
+- **問題**： 例外クラスに `message` が空文字（`""`）や `None`、あるいは長大文字列が渡された場合の動作検証が不足している。
+- **影響**： 外部連携エラー等でメッセージが取得できなかった場合に、ハンドラーが正常にデフォルトメッセージを返せるか確認できない。
+- **修正案**： `AppError("")` や `AppError(None)` のパターンをパラメータ化テスト（`pytest.mark.parametrize`）に追加する。
+- **状態**： 軽微（要確認）
