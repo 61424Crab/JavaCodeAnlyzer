@@ -161,3 +161,73 @@ raise exceptions.ToyotaApiRetryLimitException(f"トヨタAPI リトライ上限�
 - **影響**： 直接的なバグではないが、Authorization ヘッダー生成（69行目 Bearer {self._api_key}）のログ出力や例外処理時の文字列表現に機密情報が含まれないよう注意が必要。
 - **修正案**： 67〜69行目のヘッダー生成処理が正しく動作しているか確認し、ログ（83〜86行目）で出力している last_error 等にヘッダー情報（Authorization）が含まれていないことをアサートする単体テストを追加する。
 - **状態**： 要確認
+
+
+## CP013
+### [MEDIUM] FastAPI（非同期 / async def）環境における boto3 ブロッキング I/O の対応
+
+- **ファイル**： `common/file_manager.py`
+- **箇所**： `upload`, `download`, `delete` メソッド全般（`boto3` 通信処理部）
+- **レビュー観点**： [K. Python] async def 内に blocking I/O がないか / 同期・非同期ライブラリを誤って混用していないか
+- **問題**： `boto3` は同期（ブロッキング）通信ライブラリであるため、FastAPI の `async def` エンドポイントから本クラスのメソッドを直接呼び出すと、S3 との I/O 通信中に asyncio のイベントループ（Event Loop）がブロックされる。
+- **発生条件**： FastAPI の非同期エンドポイント（`async def`）から `FileManager` 的各操作メソッドを直接呼び出した場合。
+- **影響**： S3 へのファイルアップロード・ダウンロード中にサーバー全体のイベントループが停止し、同時にリクエストを処理している他のユーザーのレスポンス遅延やスループット低下を引き起こす。
+- **判断根拠**： 同期 I/O 処理はイベントループを占有し、高并发特性を阻害するため。
+- **修正案**： 呼び出し元（APIハンドラー等）において、以下のいずれかの方法でイベントループのブロックを回避する。
+
+```python
+@app.post("/upload")
+async def upload_file(bucket: str, key: str, content: str):
+  # 同期処理を別スレッドへ退避して await する
+  await asyncio.to_thread(file_manager.upload, bucket, key, content)
+  return {"status": "ok"}
+```
+
+### [MEDIUM] upload 成功テストにおける Body / ContentType アサーションの不足
+
+- **ファイル**： `tests/test_file_manager.py`
+- **箇所**： 22〜26行目 (`test_uploads_content_successfully`)
+- **レビュー観点**： [I. テスト条件・期待値] アサーションが重要な結果を確認しているか / [H. テスト網羅性]
+- **問題**： `test_uploads_content_successfully` 内で `put_object` に渡された引数の検証として `Bucket` と `Key` のみがチェックされている。`file_manager.py` 側の重要な実装要件である「`content` 文字列の UTF-8 バイト変換（`Body`）」および「`ContentType="text/csv; charset=utf-8"`」が渡されているかの検証が漏れている。
+- **発生条件**： テスト実行時。
+- **影響**： プロダクションコード側で `content.encode("utf-8")` 的引数間違いや `ContentType` の設定漏れが発生しても、本単体テストをスルーしてしまう。
+- **判断根拠**： S3 への CSV 保存において文字コード（UTF-8）と Content-Type の指定は必須要件であるため。
+- **修正案**： 25〜26 行目の末尾に以下の断言（assert）を追加する。
+```python
+assert call_kwargs["Body"] == b"col1,col2\nv1,v2\n"
+assert call_kwargs["ContentType"] == "text/csv; charset=utf-8"
+```
+
+## CP014
+### 【指摘】Jitter（ジッター）の計算ロジックおよび揺らぎ幅の見直しについて
+**該当箇所:** `src/common/sqs_sender.py` (L121-L123)
+**指摘内容:**
+現在の Jitter 計算において、加算されるランダム幅がリトライ回数（`attempt`）に依存せず固定値（最大 `0.1 * _backoff_base_ms`）となっています。そのため、リトライ回数が増えるにつれて指数バックオフ（Exponential Backoff）の全体時間に対する Jitter の割合が極めて小さくなり、リトライの分散効果が薄れる可能性があります。
+懸念点:
+_backoff_base_ms = 1000 (1秒) の場合、Jitter による加算幅はリトライ回数にかかわらず常に 0 〜 0.1秒 に固定されます。
+例えば attempt = 3（バックオフ 8秒）の際、揺らぎが 0.1秒（全体の約1.2%）しかなく、大量のリトライが同時発生した際のスパイク（Thundering Herd 問題）を十分に回避できない恐れがあります。
+【改善案・提案】
+AWS Architecture Blog等で推奨されている標準的な Jitter アルゴリズム、あるいは現在のバックオフ時間に比例した算出方式への変更をご検討ください。
+Equal Jitter最低待ち時間を保証しつつ 50% をランダム化
+前半の 50% を固定待ち時間とし、後半の 50% をランダムにすることで、急激な連続リトライを防ぎつつ十分な分散効果を得られます。
+```python
+temp = (self._backoff_base_ms / 1000) * (2**attempt)
+delay = (temp / 2) + random.uniform(0, temp / 2)
+```
+
+### 【Code Review】テストコード（test_sqs_sender.py）の修正指摘・改善提案
+
+#### 1. 【Bug】Line 153: `call_args` の型不一致によるアサーション失敗の修正
+- **該当箇所:** `test_logs_msg_err_com_004_on_client_error` (L153)
+- **内容:** `mock_logger.error.call_args[0]` は位置引数のタプル（Tuple）を返却するため、文字列 `MSG_ERR_COM_004` との直接比較（`==`）は常に `False` となりテストが失敗します。
+- **改善案:** 第一引数（メッセージコード）を正確に取得するため、`call_args.args[0]` または `call_args[0][0]` を参照する形式に修正してください。
+
+#### 2. 【Refactor】Line 182: 関数内でのローカル `import` の整理
+- **該当箇所:** `test_logs_msg_err_com_004_on_network_timeout` (L182)
+- **内容:** ファイル冒頭（L3）で既に `botocore.exceptions` がインポートされているため、関数内での `import botocore.exceptions as bce` は冗長です。
+- **改善案:** PEP 8 規約に基づき、冒頭のインポートに一本化し、関数内の個別インポートは削除してください。
+
+#### 3. 【Enhancement】Jitter 導入に伴う `time.sleep` 引数の検証強化
+- **該当箇所:** `test_sleep_called_between_retries` (L114)
+- **内容:** 現状は `call_count` のみの検証となっていますが、Jitter（ランダム加算）が正常に機能していることを担保するため、渡された待機時間が正の値であることを検証するアサーションを追加することを推奨します。
+- **改善案:** `mock_sleep.call_args_list` をループし、各呼び出しの待機時間引数が `> 0` であることをアサートする処理を追加してください。
