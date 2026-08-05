@@ -162,6 +162,20 @@ raise exceptions.ToyotaApiRetryLimitException(f"トヨタAPI リトライ上限�
 - **修正案**： 67〜69行目のヘッダー生成処理が正しく動作しているか確認し、ログ（83〜86行目）で出力している last_error 等にヘッダー情報（Authorization）が含まれていないことをアサートする単体テストを追加する。
 - **状態**： 要確認
 
+### 【指摘・提案】ToyotaApiClient ファクトリ関数の設計見直し（複数 Endpoint への対応）
+**該当箇所:** `get_toyota_api_client()` の定義箇所
+**指摘内容:**
+Parameter Store（`TOYOTA_INTERNAL_API_URL`）の定義では、接続先として以下の 4 種類の Endpoint URL が管理されています。
+1. `V1GスマホIF_APIURL`
+2. `スマート充電サービス_APIURL`
+3. `Webサイト_APIURL`
+4. `CDP_APIURL`
+現状の `get_toyota_api_client()` 実装では、単一の `config.toyota_api_base_url` のみを取得する構成になっており、呼び出し側（FastAPI の Controller/Router）から具体的な対象システムに応じた Client インスタンスを選択・注入できません。
+---
+### 【改善案】
+内部で共通処理（`_create_toyota_client`）を行う共通プライベート関数を 1 つ用意し、FastAPI の `Depends()` で直接利用できるよう、用途別の明示的なファクトリ関数を 4 つ定義することを提案します。
+これにより、内部ロジックの重複（DRY 原則）を防ぎつつ、呼び出し側での誤指定を防止し、型補完やコードの可読性を高めることができます。
+
 
 ## CP013
 ### [MEDIUM] FastAPI（非同期 / async def）環境における boto3 ブロッキング I/O の対応
