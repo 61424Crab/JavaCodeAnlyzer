@@ -66,3 +66,47 @@ JB007の抽出SQL（SQL-CTR-SEL-005）のWHERE条件から「電力解約日 IS 
 - **影響**： 外部連携エラー等でメッセージが取得できなかった場合に、ハンドラーが正常にデフォルトメッセージを返せるか確認できない。
 - **修正案**： `AppError("")` や `AppError(None)` のパターンをパラメータ化テスト（`pytest.mark.parametrize`）に追加する。
 - **状態**： 軽微（要確認）
+
+
+### [HIGH] CP_010_07 エラー応答時のリクエストID付与処理の実装漏れ
+- **ファイル**： common/response.py （画像の実装ファイル）
+- **箇所**： 6行目〜24行目 (build_error_response 関数内)
+- **レビュー観点**： [A. 設計・仕様] 設計、仕様、受入条件どおりに実装されているか / [B. 処理ロジック] 実行漏れの分岐がないか
+- **問題**： 処理フロー図の「CP_010_07 ContextVarよりリクエストIDを取得（クライアントにエラー追跡キーとして返すため）」に該当する処理が、build_error_response 関数内に実装されていない。
+- **発生条件**： サーバーエラー、バリデーションエラーなど、あらゆる異常系レスポンスを生成する時。
+- **影響**： エラー発生時にクライアントへリクエストID（トレースID）が返却されない。これにより、クライアントからエラー報告を受けた際、バックエンドのエラーログ（CP008で出力しているログ）と紐付けて調査することが非常に困難になる。
+- **判断根拠**： build_success_response では context.get_request_id() を取得してヘッダーに付与しているが、build_error_response ではその処理が完全に欠落しているため。
+- **修正案**： build_success_response と同様に、context からリクエストIDを取得し、エラーレスポンスにも付与する。
+```python
+request_id = context.get_request_id()
+headers: dict[str, str] = {}
+if request_id:
+    headers["X-Request-ID"] = request_id
+
+return responses.JSONResponse(
+    status_code=status_code,
+    content={"error_code": error_code, "error_message": error_message},
+    headers=headers,
+)
+```
+
+### [INFO] ErrorResponseスキーマとリクエストIDの格納位置の整合性確認
+- **ファイル**： common/response.py
+- **箇所**： 19行目および23行目
+- **レビュー観点**： [A. 設計・仕様] 仕様どおりに実装されているか
+- **問題**： build_error_response の Docstring（19行目）に v1g-customer-internal-api-if_v1.03.yaml の ErrorResponse スキーマに準拠した JSONResponse と記載されているが、リクエストIDを「HTTPヘッダー (X-Request-ID)」で返すか、「JSONボディ (content 内)」で返すかの仕様確認が必要。
+- **発生条件**： CP_010_07 の実装を追加する際。
+- **影響**： スキーマ定義と実装が不一致の場合、APIを利用するクライアント側でリクエストIDを正しくパースできない可能性がある。
+- **判断根拠： 正常系 (build_success_response) ではヘッダーに付与しているが、OpenAPI/Swagger仕様書において、エラー時の追跡キーをJSONボディ（例：{"error_code": "...", "error_message": "...", "request_id": "..."}）に含める定義となっているプロジェクトも多いため。
+- **修正案**： yamlファイル上の ErrorResponse スキーマを確認し、リクエストIDの格納場所（HeaderかBodyか）が仕様通りになるよう実装方針を確定させる。
+- **状態**： 要確認
+
+### [HIGH] CP_010_07 エラーレスポンス生成時のリクエストID付与検証テストの欠落
+
+- ファイル： tests/test_response.py (新規作成または更新)
+- レビュー観点： [H. テスト網羅性] テストケースが設計、仕様を網羅しているか / [I. テスト条件・期待値] アサーションが重要な結果を確認しているか
+- 問題： `build_error_response` において、ContextVar からリクエストIDを取得してヘッダー（またはJSONボディ）に設定するテストケースが存在しない（または現在の実装ではパスしない）。
+- 発生条件： 異常系レスポンス生成テストの実行時。
+- 影響： `build_error_response` 側のリクエストID設定漏れ（CP_010_07の実装漏れ）を単体テストで検知できない。
+- 修正案： `context.get_request_id` をモック化（`unittest.mock.patch`）した状態で `build_error_response` を呼び出し、レスポンスヘッダー（またはBody）に `X-Request-ID` が含まれることを確認するテストケースを追加する。
+- 状態： 要対応
