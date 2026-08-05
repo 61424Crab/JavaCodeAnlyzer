@@ -110,3 +110,54 @@ return responses.JSONResponse(
 - 影響： `build_error_response` 側のリクエストID設定漏れ（CP_010_07の実装漏れ）を単体テストで検知できない。
 - 修正案： `context.get_request_id` をモック化（`unittest.mock.patch`）した状態で `build_error_response` を呼び出し、レスポンスヘッダー（またはBody）に `X-Request-ID` が含まれることを確認するテストケースを追加する。
 - 状態： 要対応
+
+
+##CP011
+### [HIGH] ループ内での httpx.AsyncClient 毎回生成（接続リソース効率低下）
+- **ファイル**： common/toyota_api_client.py
+- **箇所**： 72〜74行目付近（for attempt in range(...) ループ内部）
+- **レビュー観点**： [G. 性能・リソース] ループ内で DB や外部サービスを繰り返し呼んでいないか / ファイル、接続、カーソル、レスポンスを閉じているか / [N. AI 生成コード]
+- **問題**： for リトライループの内部で async with httpx.AsyncClient(...) を毎回呼び出している。
+- **発生条件**： 5xx エラーやタイムアウトが発生し、リトライが実行される場合。
+- **影響**： リトライのたびに HTTP コネクションの確立・ハンドシェイク（TCP/TLS）が再実行され、レスポンスの遅延増大やソケットリソースの無駄遣いが発生する。また、接続プール（Connection Pool）の恩恵を受けられない。
+- **判断根拠**： 処理フロー図（CP_011_04）では「AsyncClient 準備（生成またはグローバルプールの利用）」がリトライループ（CP_011_03）の外側に位置しているため。
+- **修正案**： httpx.AsyncClient のコンテキストセッション生成（async with）を for ループの外側に移動させる。
+```python
+async with httpx.AsyncClient(
+    base_url=self._base_url,
+    timeout=_DEFAULT_TIMEOUT_SECONDS
+) as client:
+    for attempt in range(self._retry_limit + 1):
+        try:
+            response = await client.request(method, path, headers=headers, **kwargs)
+            ...
+```
+
+### [HIGH] リトライ上限到達時の例外二重定義（到達不能コード）
+- **ファイル**： common/toyota_api_client.py
+- **箇所**： 107〜110行目（ループ内の if 判定）および 117行目（ループ外の raise）
+- **レビュー観点**： [B. 処理ロジック] 到達不能な分岐、または実行漏れの分岐がないか / [F. 可読性・保守性] 重複コードがないか
+- **問題**： リトライ上限に達した際の ToyotaApiRetryLimitException の raise 処理が、for ループ内の if attempt >= self._retry_limit:（108行目）と、ループを抜けた直後の 117行目の両方に記述されている。
+- **発生条件**： リトライ上限回数（self._retry_limit）に達した場合。
+- **影響**： ループ内の if 文（108行目）で必ず例外がスローされるため、112〜115行目の await asyncio.sleep(delay) および 117行目の raise には永久に到達しない（最後の失敗時に Backoff の不要な sleep を挟まず即座に落ちる挙動自体は正常だが、117行目が到達不能コード（Dead Code）になっている）。
+- **判断根拠**： attempt が上限に達した時点で 108 行目の raise により関数から脱出するため、117 行目が実行されることはない。
+- **修正案**： ループ内では「上限未達の場合のみ sleep してリトライ継続」とし、上限到達時はループを抜けて最後に一括で raise するか、不要な117行目を削除する。
+```python
+# 修正案例：ループ内は sleep のみとし、上限に達したらループ終了後に raise する
+if attempt < self._retry_limit:
+    delay = (self._backoff_base_ms / 1000) * (2**attempt) + random.uniform(0, 0.1 * self._backoff_base_ms / 1000)
+    await asyncio.sleep(delay)
+
+# ループを抜け切った＝全リトライ失敗
+raise exceptions.ToyotaApiRetryLimitException(f"トヨタAPI リトライ上限超過: {last_error}")
+```
+
+### [MEDIUM] APIキー等の機密情報ヘッダーログ出力リスクおよび kwarg 破棄
+- **ファイル**： common/toyota_api_client.py
+- **箇所**： 67行目 (kwargs.pop("headers", {}))
+- **レビュー観点**： [D. 例外・エラー・ログ] パスワード、Token、個人情報、接続情報をログへ出力していないか / [C. 入出力・更新内容]
+- **問題**： kwargs.pop("headers", {}) で呼び出し元の headers を取り出しているが、引数として渡された kwargs 内に headers 以外の機密情報（認証クエリ等）が含まれていた場合、そのまま httpx.request へ渡される。
+- **発生条件**： 呼び出し元が headers 以外のパラメータに機密情報を設定して request() を呼び出した場合。
+- **影響**： 直接的なバグではないが、Authorization ヘッダー生成（69行目 Bearer {self._api_key}）のログ出力や例外処理時の文字列表現に機密情報が含まれないよう注意が必要。
+- **修正案**： 67〜69行目のヘッダー生成処理が正しく動作しているか確認し、ログ（83〜86行目）で出力している last_error 等にヘッダー情報（Authorization）が含まれていないことをアサートする単体テストを追加する。
+- **状態**： 要確認
