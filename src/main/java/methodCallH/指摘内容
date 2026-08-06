@@ -283,3 +283,17 @@ delay = (temp / 2) + random.uniform(0, temp / 2)
 - **状态**： 要対応
 
 ---
+
+## CP010
+
+### [MEDIUM] ContextVar に request_id が未設定（None）の場合の境界値テストの欠落
+
+- **テストID**： TC-010-03, TC-010-07 (`TestBuildErrorResponse`, `TestBuildSuccessResponse`)
+- **レビュー観点**： [H. テスト網羅性] 境界値を含んでいるか / [I. テスト条件・期待値] アサーションが重要な結果を確認しているか
+- **問題**： `TC-010-03` および `TC-010-07` では ContextVar に `request_id` が存在する場合の正常系のみが定義されている。ContextVar に `request_id` が存在しない（`None`）場合に、`X-Request-ID` ヘッダーが付与されず、かつエラーなくレスポンスが生成されるかの境界値検証が欠落している。
+- **発生条件**： ContextVar（リクエストコンテキスト）が初期化されていない環境や、ヘッダーに Request ID が存在しないリクエスト時。
+- **影響**： `request_id` が `None` の際に KeyError や AttributeError 等の例外が発生したり、`X-Request-ID: None` のような不正なヘッダーが出力されるバグを単体テストで検知できない。
+- **修正案**： 以下の境界値テスト用ケースを追加する。
+  - `test_does_not_set_x_request_id_when_none_in_error_response` (error_response 側)
+  - `test_does_not_set_x_request_id_when_none_in_success_response` (success_response 側)
+- **状態**： 要対応
