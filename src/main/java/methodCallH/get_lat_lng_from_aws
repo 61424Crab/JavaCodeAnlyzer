@@ -1,0 +1,74 @@
+import boto3
+from botocore.exceptions import ClientError
+
+def get_lat_lng_from_aws(address: str, index_name: str, region: str = 'ap-northeast-1') -> tuple:
+    """
+    AWS Amazon Location Serviceを呼び出し、住所を緯度経度に変換する
+    
+    :param address: 変換対象の日本の住所
+    :param index_name: AWSコンソールで作成したPlace Indexの名前
+    :param region: AWSリージョン（デフォルトは東京）
+    :return: (Latitude, Longitude) 緯度と経度のタプル。失敗時は (None, None) を返す
+    """
+    # Location Serviceクライアントの初期化
+    # 注意：ECS環境で実行する場合、boto3はTask Roleから自動的に認証情報を取得するため、AK/SKのハードコードは不要です
+    client = boto3.client('location', region_name=region)
+
+    try:
+        # 検索APIの呼び出し
+        response = client.search_place_index_for_text(
+            IndexName=index_name,
+            Text=address,
+            Language='ja', # 日本語での解析を明示的に指定し、精度を向上させる
+            MaxResults=1   # 最もマッチした最初の結果のみを取得する
+        )
+
+        results = response.get('Results', [])
+        
+        if results:
+            # ⚠️ 注意：AWSが返す座標のフォーマットはGeoJSON標準の [経度(Lon), 緯度(Lat)] です
+            # xとyの順番を間違えないよう注意してください
+            point = results[0]['Place']['Geometry']['Point']
+            lon = point[0]
+            lat = point[1]
+            
+            # ログ出力用にAWS側でフォーマットされた標準住所名も取得可能
+            matched_address = results[0]['Place'].get('Label', '')
+            print(f"[INFO] 住所のパースに成功しました（AWS標準名）: {matched_address}")
+            
+            return lat, lon
+        else:
+            print(f"[WARN] AWSで住所を解析できませんでした: {address}")
+            return None, None
+
+    except ClientError as e:
+        # AWS API呼び出しの例外をキャッチ（ネットワークエラー、権限不足、Indexが存在しない等）
+        error_code = e.response['Error']['Code']
+        error_msg = e.response['Error']['Message']
+        print(f"[ERROR] AWS Location API エラー - Code: {error_code}, Message: {error_msg}")
+        return None, None
+    except Exception as e:
+        # その他の予期せぬ例外をキャッチ
+        print(f"[FATAL] 予期せぬエラーが発生しました: {e}")
+        return None, None
+
+# ==========================================
+# テスト実行ブロック
+# ==========================================
+if __name__ == "__main__":
+    # AWSコンソールで事前に作成したIndex Nameに置き換えてください
+    AWS_PLACE_INDEX_NAME = "JapanAddressIndex"
+    
+    # テスト用の住所
+    test_address = "神奈川県川崎市川崎区新川通4-6"
+
+    print("AWS Location Serviceの呼び出しを開始します...")
+    latitude, longitude = get_lat_lng_from_aws(test_address, AWS_PLACE_INDEX_NAME)
+
+    if latitude and longitude:
+        print("========================================")
+        print(" [AWS 変換成功]")
+        print(f" 変換元住所      : {test_address}")
+        print(f" 緯度 (Latitude) : {latitude:.6f}")
+        print(f" 経度 (Longitude): {longitude:.6f}")
+        print("========================================")
